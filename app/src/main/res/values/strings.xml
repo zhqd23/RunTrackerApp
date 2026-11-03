@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">跑步记录</string>
+
+    <!-- 导航 -->
+    <string name="nav_tracking">运动</string>
+    <string name="nav_history">记录</string>
+    <string name="nav_stats">统计</string>
+
+    <!-- 实时运动页 -->
+    <string name="tracking_start">开始跑步</string>
+    <string name="tracking_pause">暂停</string>
+    <string name="tracking_resume">继续</string>
+    <string name="tracking_finish">结束</string>
+    <string name="tracking_hr">心率</string>
+    <string name="tracking_hr_unit">bpm</string>
+    <string name="tracking_distance">距离</string>
+    <string name="tracking_distance_unit">公里</string>
+    <string name="tracking_cadence">步频</string>
+    <string name="tracking_cadence_unit">步/分</string>
+    <string name="tracking_avg_speed">平均速度</string>
+    <string name="tracking_avg_speed_unit">公里/时</string>
+    <string name="tracking_current_speed">即时速度</string>
+    <string name="tracking_heartrate_source_ble">蓝牙心率已连接</string>
+    <string name="tracking_heartrate_source_sim">模拟心率模式</string>
+    <string name="tracking_heartrate_source_searching">正在搜索蓝牙心率设备…</string>
+    <string name="tracking_notification_channel_name">跑步记录</string>
+    <string name="tracking_notification_title">跑步进行中</string>
+    <string name="tracking_notification_text">正在记录定位与运动数据</string>
+    <string name="tracking_notification_paused">运动已暂停</string>
+    <string name="tracking_map_hint_idle">点击「开始跑步」，轨迹将实时显示在这里</string>
+    <string name="tracking_map_hint_waiting_gps">等待 GPS 定位…</string>
+
+    <!-- 地图标记 -->
+    <string name="map_marker_start">起点</string>
+    <string name="map_marker_end">终点</string>
+
+    <!-- 历史记录页 -->
+    <string name="history_title">历史记录</string>
+    <string name="history_list_title">跑步记录</string>
+    <string name="history_empty">暂无跑步记录\n点击「运动」开始第一次跑步吧</string>
+    <string name="history_empty_hint">暂无跑步记录\n完成一次跑步后，记录会显示在这里</string>
+    <string name="history_distance">距离</string>
+    <string name="history_duration">时长</string>
+    <string name="history_pace">配速</string>
+    <string name="history_avg_hr">平均心率</string>
+    <string name="history_delete_title">删除跑步记录</string>
+    <string name="history_delete_message">确定删除 %1$s 的这条跑步记录吗？删除后不可恢复。</string>
+
+    <!-- 详情页 -->
+    <string name="detail_title">跑步详情</string>
+    <string name="detail_date">日期</string>
+    <string name="detail_duration">总时长</string>
+    <string name="detail_distance">总距离</string>
+    <string name="detail_avg_speed">平均速度</string>
+    <string name="detail_max_speed">最大速度</string>
+    <string name="detail_avg_hr">平均心率</string>
+    <string name="detail_max_hr">最高心率</string>
+    <string name="detail_avg_cadence">平均步频</string>
+    <string name="detail_calories">卡路里</string>
+    <string name="detail_track">路线轨迹</string>
+    <string name="detail_loading">记录加载中…</string>
+    <string name="detail_no_track">轨迹点不足，无法绘制地图</string>
+    <string name="detail_distance_value">总距离  %1$s km</string>
+    <string name="detail_duration_value">总时长  %1$s</string>
+    <string name="detail_pace_value">平均配速  %1$s /km</string>
+
+    <!-- 统计页 -->
+    <string name="stats_title">统计</string>
+    <string name="stats_tab_total">累计</string>
+    <string name="stats_tab_week">周报</string>
+    <string name="stats_tab_month">月报</string>
+    <string name="stats_week">本周</string>
+    <string name="stats_month">本月</string>
+    <string name="stats_total_distance">累计跑量</string>
+    <string name="stats_total_count">总次数</string>
+    <string name="stats_total_duration">总时长</string>
+    <string name="stats_avg_pace">平均配速</string>
+    <string name="stats_total_calories">累计消耗</string>
+    <string name="stats_total_kcal">总卡路里</string>
+    <string name="stats_kcal">卡路里</string>
+    <string name="stats_avg_heartrate">平均心率</string>
+    <string name="stats_period_count">次数</string>
+    <string name="stats_period_duration">时长</string>
+    <string name="stats_unit_km">公里</string>
+    <string name="stats_unit_times">次</string>
+    <string name="stats_empty">暂无数据，开始跑步后这里会展示汇总统计</string>
+    <string name="stats_empty_hint">暂无统计数据\n完成一次跑步后，统计将显示在这里</string>
+    <string name="stats_period_empty">%1$s（%2$s）暂无跑步记录</string>
+    <string name="stats_period_distance_title">%1$s跑量  ·  %2$s</string>
+
+    <!-- 通用单位 -->
+    <string name="unit_km_short">km</string>
+    <string name="unit_kmh_short">km/h</string>
+    <string name="unit_bpm">bpm</string>
+    <string name="unit_spm">步/分</string>
+    <string name="unit_kcal_short">kcal</string>
+    <string name="unit_per_km">/km</string>
+    <string name="unit_km_h">公里/时</string>
+    <string name="unit_min_km">分/公里</string>
+    <string name="unit_kcal">千卡</string>
+
+    <!-- 通用 -->
+    <string name="common_confirm">确认</string>
+    <string name="common_cancel">取消</string>
+    <string name="common_delete">删除</string>
+    <string name="common_back">返回</string>
+</resources>

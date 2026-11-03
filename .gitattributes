@@ -1,0 +1,12 @@
+# 统一换行处理，避免 Windows 上提交的 CRLF 破坏 Gradle 脚本
+* text=auto
+
+# Gradle Wrapper：Unix 脚本必须是 LF，Windows 脚本用 CRLF
+gradlew text eol=lf
+*.sh text eol=lf
+*.bat text eol=crlf
+
+# 二进制文件不做换行转换
+*.jar binary
+*.png binary
+*.apk binary
