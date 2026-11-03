@@ -1,7 +1,12 @@
 package com.run.tracker.map
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Color
+import android.location.Location
+import android.location.LocationManager
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -11,28 +16,108 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.run.tracker.R
 import com.run.tracker.data.model.TrackPoint
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import com.run.tracker.util.CoordUtils
+import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
 import org.osmdroid.util.BoundingBox
 import org.osmdroid.util.GeoPoint
+import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.CopyrightOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polyline
 
-/** 创建并初始化一个 osmdroid MapView（可供多处复用的共享实例） */
-fun createMapView(context: Context, interactive: Boolean = true): MapView =
-    MapView(context).apply {
-        setTileSource(TileSourceFactory.MAPNIK)
-        setMultiTouchControls(interactive)
-        isEnabled = interactive
-        minZoomLevel = 3.0
-        maxZoomLevel = 20.0
-        controller.setZoom(16.0)
+/**
+ * 瓦片源：高德街道图。
+ *
+ * 选择理由（真机实测结论）：
+ * - OSM 官方瓦片（tile.openstreetmap.org）在部分网络环境下直接连接失败，地图整块空白；
+ * - CARTO 底图可连通，但已要求 API Key，无水印瓦片会返回 "API KEY REQUIRED" 提示图；
+ * - Esri 街道图在 z16 已无国内数据，返回 "Map data not yet available" 占位图；
+ * - 高德国内覆盖完整、无需 Key，代价是使用 GCJ-02 坐标，
+ *   因此绘制轨迹和设置视野中心时都需经过 [CoordUtils.wgs84ToGcj02] 转换。
+ */
+private class AmapTileSource : OnlineTileSourceBase(
+    "AMapStreet",
+    3,
+    18,
+    256,
+    ".png",
+    arrayOf(
+        "https://webrd01.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8",
+        "https://webrd02.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8",
+        "https://webrd03.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8",
+        "https://webrd04.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8"
+    ),
+    "© 高德地图 AutoNavi"
+) {
+    override fun getTileURLString(pMapTileIndex: Long): String {
+        val z = MapTileIndex.getZoom(pMapTileIndex)
+        val x = MapTileIndex.getX(pMapTileIndex)
+        val y = MapTileIndex.getY(pMapTileIndex)
+        return getBaseUrl() + "&x=$x&y=$y&z=$z"
     }
+}
+
+private val TILE_SOURCE: OnlineTileSourceBase = AmapTileSource()
+
+/** 每张地图的版权署名覆盖物：轨迹更新会清空 overlays，因此单独保存以便重挂 */
+private val copyrightOverlays = java.util.WeakHashMap<MapView, CopyrightOverlay>()
+
+/** 创建并初始化一个 osmdroid MapView（可供多处复用的共享实例） */
+fun createMapView(context: Context, interactive: Boolean = true): MapView {
+    val map = MapView(context)
+    map.setTileSource(TILE_SOURCE)
+    map.setMultiTouchControls(interactive)
+    map.isEnabled = interactive
+    map.minZoomLevel = 3.0
+    map.maxZoomLevel = 18.0
+    map.controller.setZoom(16.0)
+    // 初始视野：优先使用最后已知位置，避免地图停在 (0,0) 大西洋上显示「无数据」。
+    // 底图是 GCJ-02 坐标，因此中心点同样要做一次转换。
+    lastKnownLocation(context)?.let {
+        val (lat, lon) = CoordUtils.wgs84ToGcj02(it.latitude, it.longitude)
+        map.controller.setCenter(GeoPoint(lat, lon))
+    }
+    // 底图署名（瓦片提供方使用条款要求展示）
+    val copyright = CopyrightOverlay(context)
+    copyrightOverlays[map] = copyright
+    map.overlays.add(copyright)
+    return map
+}
+
+/** 取最近一次已知位置（GPS / 网络 / 被动），无权限或无缓存时返回 null */
+@SuppressLint("MissingPermission")
+private fun lastKnownLocation(context: Context): Location? {
+    val granted = ContextCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_FINE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+        context, Manifest.permission.ACCESS_COARSE_LOCATION
+    ) == PackageManager.PERMISSION_GRANTED
+    if (!granted) return null
+
+    val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        ?: return null
+    val providers = listOf(
+        LocationManager.GPS_PROVIDER,
+        LocationManager.NETWORK_PROVIDER,
+        LocationManager.PASSIVE_PROVIDER
+    )
+    return providers.mapNotNull { provider ->
+        try {
+            manager.getLastKnownLocation(provider)
+        } catch (e: SecurityException) {
+            null
+        } catch (e: Exception) {
+            null
+        }
+    }.maxByOrNull { it.time }
+}
 
 /**
  * osmdroid 地图 Compose 封装：在 MapView 上绘制跑步轨迹（Polyline + 起终点标记）。
@@ -104,9 +189,15 @@ private fun updateTrack(
     currentFollowKey: Int
 ): Int? {
     map.overlays.clear()
+    // 清空后重新挂上版权署名（高德要求展示）
+    copyrightOverlays[map]?.let { map.overlays.add(it) }
     if (points.isEmpty()) return null
 
-    val geoPoints = points.map { GeoPoint(it.lat, it.lon) }
+    // 底图为 GCJ-02，绘制前统一转换；数据库里保存的仍是原始 WGS-84
+    val geoPoints = points.map {
+        val (lat, lon) = CoordUtils.wgs84ToGcj02(it.lat, it.lon)
+        GeoPoint(lat, lon)
+    }
 
     if (geoPoints.size >= 2) {
         val polyline = Polyline().apply {
@@ -118,18 +209,16 @@ private fun updateTrack(
     }
 
     // 起点与终点标记
-    val start = points.first()
     val startMarker = Marker(map).apply {
-        position = GeoPoint(start.lat, start.lon)
+        position = geoPoints.first()
         setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
         title = map.context.getString(R.string.map_marker_start)
     }
     map.overlays.add(startMarker)
 
-    if (points.size >= 2) {
-        val end = points.last()
+    if (geoPoints.size >= 2) {
         val endMarker = Marker(map).apply {
-            position = GeoPoint(end.lat, end.lon)
+            position = geoPoints.last()
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
             title = map.context.getString(R.string.map_marker_end)
         }
