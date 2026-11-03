@@ -19,6 +19,7 @@
     <string name="tracking_cadence">步频</string>
     <string name="tracking_cadence_unit">步/分</string>
     <string name="tracking_avg_speed">平均速度</string>
+    <string name="tracking_avg_pace">平均配速</string>
     <string name="tracking_avg_speed_unit">公里/时</string>
     <string name="tracking_current_speed">即时速度</string>
     <string name="tracking_heartrate_source_ble">蓝牙心率已连接</string>
@@ -54,6 +55,7 @@
     <string name="detail_duration">总时长</string>
     <string name="detail_distance">总距离</string>
     <string name="detail_avg_speed">平均速度</string>
+    <string name="detail_avg_pace">平均配速</string>
     <string name="detail_max_speed">最大速度</string>
     <string name="detail_avg_hr">平均心率</string>
     <string name="detail_max_hr">最高心率</string>

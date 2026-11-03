@@ -98,7 +98,7 @@ class TrackingService : Service() {
         super.onCreate()
         createNotificationChannel()
         locationTracker = LocationTracker(this)
-        stepTracker = StepCounterTracker(this)
+        stepTracker = StepCounterTracker(this, serviceScope)
         heartRateManager = HeartRateManager(this, serviceScope)
         collectSensorData()
     }

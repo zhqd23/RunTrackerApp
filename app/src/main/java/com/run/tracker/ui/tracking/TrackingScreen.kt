@@ -113,9 +113,9 @@ fun TrackingScreen(
         ) {
             MetricCard(
                 modifier = Modifier.weight(1f),
-                label = stringResource(R.string.tracking_avg_speed),
-                value = FormatUtils.formatKmh(uiState.avgSpeedMs),
-                unit = stringResource(R.string.unit_kmh_short),
+                label = stringResource(R.string.tracking_avg_pace),
+                value = FormatUtils.formatPace(uiState.avgSpeedMs),
+                unit = stringResource(R.string.unit_per_km),
                 accent = MaterialTheme.colorScheme.primary
             )
             MetricCard(

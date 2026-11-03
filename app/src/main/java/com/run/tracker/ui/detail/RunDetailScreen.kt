@@ -147,13 +147,6 @@ private fun DetailContent(run: RunRecordEntity, modifier: Modifier = Modifier) {
                     ),
                     style = MaterialTheme.typography.bodyLarge
                 )
-                Text(
-                    text = stringResource(
-                        R.string.detail_pace_value,
-                        FormatUtils.formatPace(run.avgSpeedMs)
-                    ),
-                    style = MaterialTheme.typography.bodyLarge
-                )
             }
         }
 
@@ -164,9 +157,9 @@ private fun DetailContent(run: RunRecordEntity, modifier: Modifier = Modifier) {
         ) {
             DetailStat(
                 modifier = Modifier.weight(1f),
-                label = stringResource(R.string.detail_avg_speed),
-                value = FormatUtils.formatKmh(run.avgSpeedMs) +
-                        " " + stringResource(R.string.unit_kmh_short)
+                label = stringResource(R.string.detail_avg_pace),
+                value = FormatUtils.formatPace(run.avgSpeedMs) +
+                        " " + stringResource(R.string.unit_per_km)
             )
             DetailStat(
                 modifier = Modifier.weight(1f),
