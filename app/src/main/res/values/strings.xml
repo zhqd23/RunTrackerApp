@@ -24,6 +24,7 @@
     <string name="tracking_heartrate_source_ble">蓝牙心率已连接</string>
     <string name="tracking_heartrate_source_sim">模拟心率模式</string>
     <string name="tracking_heartrate_source_searching">正在搜索蓝牙心率设备…</string>
+    <string name="tracking_heartrate_source_idle">心率未连接</string>
     <string name="tracking_notification_channel_name">跑步记录</string>
     <string name="tracking_notification_title">跑步进行中</string>
     <string name="tracking_notification_text">正在记录定位与运动数据</string>

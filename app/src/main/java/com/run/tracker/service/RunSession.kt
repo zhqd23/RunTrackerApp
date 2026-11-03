@@ -24,6 +24,12 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         private const val MAX_PLAUSIBLE_SPEED_MS = 12.0
         /** 低于该距离（米）的定位漂移不累加 */
         private const val MIN_POINT_DISTANCE_M = 0.5
+        /** 精度差于该值（米）的定位点直接丢弃：室内漂移常见 30 米以上 */
+        private const val MAX_ACCURACY_METERS = 30.0
+        /** 最大速度的滑动窗口长度（毫秒） */
+        private const val SPEED_WINDOW_MS = 10_000L
+        /** 窗口跨度不足该值时不计最大速度，避免单点跳变把峰值抬高 */
+        private const val MAX_SPEED_MIN_WINDOW_MS = 5_000L
     }
 
     var state: RunState = RunState.IDLE
@@ -65,6 +71,9 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
     private var lastLocationTimeMs: Long = 0L
     private var lastPoint: TrackPoint? = null
 
+    /** (时间戳, 累计距离) 采样，用于滑动窗口计算平滑速度 */
+    private val speedSamples = ArrayDeque<Pair<Long, Double>>()
+
     // ---------------------------------------------------------------------
     // 生命周期
     // ---------------------------------------------------------------------
@@ -88,6 +97,7 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         cadenceSum = 0
         cadenceCount = 0
         totalSteps = 0
+        speedSamples.clear()
     }
 
     fun pause() {
@@ -118,8 +128,16 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
     // 数据输入
     // ---------------------------------------------------------------------
 
-    fun onLocation(lat: Double, lon: Double, altitude: Double, timeMs: Long) {
+    fun onLocation(
+        lat: Double,
+        lon: Double,
+        altitude: Double,
+        timeMs: Long,
+        accuracyMeters: Double = 0.0
+    ) {
         if (state != RunState.RUNNING) return
+        // 精度过差的点直接丢弃（0 表示未知精度，按可用处理）
+        if (accuracyMeters > MAX_ACCURACY_METERS) return
 
         val prev = lastLocation
         if (prev != null) {
@@ -131,7 +149,6 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
             if (speed <= MAX_PLAUSIBLE_SPEED_MS && delta >= MIN_POINT_DISTANCE_M) {
                 distanceMeters += delta
                 currentSpeedMs = speed
-                if (speed > maxSpeedMs) maxSpeedMs = speed
             } else {
                 // 噪声点：不累加距离，即时速度视为 0
                 currentSpeedMs = 0.0
@@ -153,6 +170,32 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         )
         points.add(point)
         lastPoint = point
+
+        updateSmoothedMaxSpeed(timeMs)
+    }
+
+    /**
+     * 用最近 [SPEED_WINDOW_MS] 内的累计距离计算平滑速度并更新最大速度。
+     *
+     * 单个定位点的跳变虽然会通过距离阈值过滤掉一部分，但仍可能恰好落在合理区间内
+     * （例如 1 秒内漂移 8 m，约 30 km/h）。按窗口跨度平均后这类尖峰会被显著削平，
+     * 同时不影响持续奔跑时的真实速度。
+     */
+    private fun updateSmoothedMaxSpeed(nowMs: Long) {
+        speedSamples.addLast(nowMs to distanceMeters)
+        while (speedSamples.size > 2 &&
+            nowMs - speedSamples.first().first > SPEED_WINDOW_MS
+        ) {
+            speedSamples.removeFirst()
+        }
+
+        val (startTimeMs, startDistance) = speedSamples.first()
+        val spanMs = nowMs - startTimeMs
+        // 窗口跨度不足时不更新，避免刚开始的瞬时尖峰成为峰值
+        if (spanMs < MAX_SPEED_MIN_WINDOW_MS) return
+
+        val speed = (distanceMeters - startDistance) / (spanMs / 1000.0)
+        if (speed > maxSpeedMs) maxSpeedMs = speed
     }
 
     fun onHeartRate(hr: Int) {

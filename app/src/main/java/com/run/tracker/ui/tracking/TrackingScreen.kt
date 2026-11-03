@@ -188,6 +188,7 @@ fun TrackingScreen(
 @Composable
 private fun HeartRateSourceChip(source: HeartRateSource) {
     val (textRes, color) = when (source) {
+        HeartRateSource.IDLE -> R.string.tracking_heartrate_source_idle to Color.Gray
         HeartRateSource.SEARCHING -> R.string.tracking_heartrate_source_searching to BlueAccent
         HeartRateSource.BLE -> R.string.tracking_heartrate_source_ble to GreenLight
         HeartRateSource.SIMULATED -> R.string.tracking_heartrate_source_sim to OrangeAccent

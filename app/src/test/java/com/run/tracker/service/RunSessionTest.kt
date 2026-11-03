@@ -54,8 +54,62 @@ class RunSessionTest {
 
         assertEquals(4.4478, session.distanceMeters, 0.01)
         assertEquals(2.2239, session.currentSpeedMs, 0.01)
-        assertEquals(2.2239, session.maxSpeedMs, 0.01)
         assertEquals(3, session.points.size)
+    }
+
+    @Test
+    fun `精度过差的定位点被丢弃`() {
+        val session = RunSession()
+        session.start()
+        // 室内常见的 50 米精度点：既不入轨迹，也不计距离
+        session.onLocation(0.0, 0.0, 0.0, 0L, accuracyMeters = 50.0)
+
+        assertTrue(session.points.isEmpty())
+        assertEquals(0.0, session.distanceMeters, 1e-9)
+    }
+
+    @Test
+    fun `精度正常的定位点正常记录`() {
+        val session = RunSession()
+        session.start()
+        session.onLocation(0.0, 0.0, 0.0, 0L, accuracyMeters = 5.0)
+        session.onLocation(stepLat, 0.0, 0.0, 1_000L, accuracyMeters = 5.0)
+
+        assertEquals(2, session.points.size)
+        assertEquals(2.2239, session.distanceMeters, 0.01)
+    }
+
+    @Test
+    fun `单点跳变不会抬高最大速度`() {
+        val session = RunSession()
+        session.start()
+        session.onLocation(0.0, 0.0, 0.0, 0L)
+        // 1 秒内漂移约 8.4 米（约 30 km/h），窗口跨度不足 5 秒，不计入最大速度
+        session.onLocation(0.0000755, 0.0, 0.0, 1_000L)
+        assertEquals(0.0, session.maxSpeedMs, 1e-9)
+
+        // 之后原地停留到 11 秒，窗口跨度足够，但窗口内平均速度接近 0
+        session.onLocation(0.0000755, 0.0, 0.0, 11_000L)
+        assertTrue(
+            "最大速度应被窗口削平，实际 ${session.maxSpeedMs}",
+            session.maxSpeedMs < 1.5
+        )
+    }
+
+    @Test
+    fun `匀速跑动时最大速度接近真实速度`() {
+        val session = RunSession()
+        session.start()
+        // 每 2 秒前进约 4 米，即 2 m/s
+        var timeMs = 0L
+        var lat = 0.0
+        repeat(10) {
+            session.onLocation(lat, 0.0, 0.0, timeMs)
+            lat += 0.000036
+            timeMs += 2_000L
+        }
+
+        assertEquals(2.0, session.maxSpeedMs, 0.15)
     }
 
     @Test

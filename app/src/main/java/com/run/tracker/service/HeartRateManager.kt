@@ -32,7 +32,13 @@ import kotlin.random.Random
 import java.util.UUID
 
 /** 心率数据来源 */
-enum class HeartRateSource { SIMULATED, BLE, SEARCHING }
+enum class HeartRateSource {
+    /** 未开始 / 已停止：既没有连接设备，也没有在生成模拟数据 */
+    IDLE,
+    SIMULATED,
+    BLE,
+    SEARCHING
+}
 
 /**
  * 心率管理器：
@@ -73,7 +79,7 @@ class HeartRateManager(
     private val _heartRate = MutableStateFlow(0)
     val heartRate: StateFlow<Int> = _heartRate
 
-    private val _source = MutableStateFlow(HeartRateSource.SEARCHING)
+    private val _source = MutableStateFlow(HeartRateSource.IDLE)
     val source: StateFlow<HeartRateSource> = _source
 
     private val _connected = MutableStateFlow(false)
@@ -317,6 +323,8 @@ class HeartRateManager(
         attemptedDevices.clear()
         loggedScanDevices.clear()
         _heartRate.value = 0
+        // 停止后不应再显示「已连接」或「模拟中」，回到未连接状态
+        _source.value = HeartRateSource.IDLE
     }
 
     // ---------------------------------------------------------------------

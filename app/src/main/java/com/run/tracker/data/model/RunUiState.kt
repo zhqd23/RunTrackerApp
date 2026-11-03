@@ -30,8 +30,8 @@ data class RunUiState(
     val avgCadence: Int = 0,
     /** 卡路里（千卡） */
     val calories: Double = 0.0,
-    /** 心率数据来源（BLE / 模拟 / 搜索中） */
-    val heartRateSource: HeartRateSource = HeartRateSource.SIMULATED,
+    /** 心率数据来源（BLE / 模拟 / 搜索中 / 未连接） */
+    val heartRateSource: HeartRateSource = HeartRateSource.IDLE,
     /** 轨迹点 */
     val points: List<TrackPoint> = emptyList(),
     /** 是否已获取到 GPS 定位 */

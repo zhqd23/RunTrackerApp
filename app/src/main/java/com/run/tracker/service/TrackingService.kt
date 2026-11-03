@@ -186,8 +186,9 @@ class TrackingService : Service() {
             trackPoints = session.points.toList()
         )
 
-        // 先把 IDLE 终态推给 UI，再撤掉前台通知，界面不会卡在「跑步中」
-        publishState()
+        // 结束：UI 复位到初始状态。本次数据已经存库，明细可在「记录」里查看，
+        // 不应继续显示上一次跑步的心率与「蓝牙已连接」。
+        _uiState.value = RunUiState(heartRateSource = heartRateManager.source.value)
         stopForeground(STOP_FOREGROUND_REMOVE)
         val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nm.cancel(NOTIFICATION_ID)
@@ -228,12 +229,14 @@ class TrackingService : Service() {
         }
         serviceScope.launch {
             locationTracker.locations.collect { loc ->
-                // 统一使用系统当前时间作为采样时间戳，保证速度计算一致
+                // 统一使用系统当前时间作为采样时间戳，保证速度计算一致；
+                // 同时把定位精度传下去，供会话过滤室内漂移
                 session.onLocation(
                     lat = loc.latitude,
                     lon = loc.longitude,
                     altitude = loc.altitude,
-                    timeMs = System.currentTimeMillis()
+                    timeMs = System.currentTimeMillis(),
+                    accuracyMeters = if (loc.hasAccuracy()) loc.accuracy.toDouble() else 0.0
                 )
             }
         }
