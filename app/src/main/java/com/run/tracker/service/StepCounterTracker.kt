@@ -6,7 +6,9 @@ import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.SystemClock
+import android.util.Log
 import com.run.tracker.util.CadenceSmoother
+import com.run.tracker.util.StepCalibrator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -14,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 /**
  * 步频追踪：计算步频与本次跑步步数。
@@ -33,6 +36,10 @@ class StepCounterTracker(
     private val scope: CoroutineScope
 ) {
 
+    companion object {
+        private const val TAG = "StepCounterTracker"
+    }
+
     private val sensorManager =
         context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
 
@@ -45,6 +52,9 @@ class StepCounterTracker(
     val steps: StateFlow<Long> = _steps
 
     private val smoother = CadenceSmoother()
+
+    /** 自适应校准：某些机型 detector 会漏报，用 counter 的比例修正 */
+    private val calibrator = StepCalibrator()
 
     /** 起跑时的传感器累计步数，-1 表示尚未记录基线 */
     private var baselineSteps = -1L
@@ -73,6 +83,13 @@ class StepCounterTracker(
             _steps.value = (totalSteps - baselineSteps).coerceAtLeast(0L)
             if (!hasDetector) {
                 smoother.onStep(SystemClock.elapsedRealtime(), totalSteps)
+            } else {
+                // counter 上报的时刻同时取 detector 的计数，用两者的增量比做校准
+                calibrator.onCounterSample(
+                    timeMs = SystemClock.elapsedRealtime(),
+                    counterSteps = _steps.value,
+                    detectorSteps = detectorSteps
+                )
             }
         }
 
@@ -115,10 +132,21 @@ class StepCounterTracker(
         }
 
         // 每秒刷新一次步频：传感器无新事件时也要让数值衰减
+        var tick = 0
         tickJob = scope.launch {
             while (isActive) {
                 delay(1_000)
-                _cadence.value = smoother.cadence(SystemClock.elapsedRealtime())
+                val raw = smoother.cadence(SystemClock.elapsedRealtime())
+                val factor = calibrator.factor()
+                val calibrated = (raw * factor).roundToInt()
+                _cadence.value = calibrated.coerceIn(0, CadenceSmoother.MAX_CADENCE)
+                // 每 5 秒输出一次，便于在 Logcat 观察校准是否生效
+                if (++tick % 5 == 0) {
+                    Log.d(
+                        TAG,
+                        "cadence raw=$raw factor=%.2f -> %d".format(factor, _cadence.value)
+                    )
+                }
             }
         }
     }
@@ -134,6 +162,7 @@ class StepCounterTracker(
     /** 清空基线、采样与输出值（每次开始记录前调用） */
     fun reset() {
         smoother.reset()
+        calibrator.reset()
         baselineSteps = -1L
         detectorSteps = 0L
         _steps.value = 0L
