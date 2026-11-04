@@ -13,6 +13,9 @@ class RunSessionTest {
     /** 纬度相差 0.00002 度约等于 2.2239 米，1 秒间隔对应约 2.22 m/s 的正常跑步速度 */
     private val stepLat = 0.00002
 
+    /** 位移（米）-> 纬度度数（近似） */
+    private fun lat(meters: Double): Double = meters / 111_194.93
+
     @Test
     fun `初始状态为空会话`() {
         val session = RunSession()
@@ -72,11 +75,56 @@ class RunSessionTest {
     fun `精度正常的定位点正常记录`() {
         val session = RunSession()
         session.start()
-        session.onLocation(0.0, 0.0, 0.0, 0L, accuracyMeters = 5.0)
-        session.onLocation(stepLat, 0.0, 0.0, 1_000L, accuracyMeters = 5.0)
+        // 精度 3 米 -> 距离门槛 1.5 米，2.22 米的位移可以计入
+        session.onLocation(0.0, 0.0, 0.0, 0L, accuracyMeters = 3.0)
+        session.onLocation(stepLat, 0.0, 0.0, 1_000L, accuracyMeters = 3.0)
 
         assertEquals(2, session.points.size)
         assertEquals(2.2239, session.distanceMeters, 0.01)
+    }
+
+    @Test
+    fun `原地抖动不会累积距离`() {
+        val session = RunSession()
+        session.start()
+        // 精度 5 米 -> 门槛 2.5 米；在 ±1 米之间来回抖动，全部低于门槛
+        session.onLocation(0.0, 0.0, 0.0, 0L, accuracyMeters = 5.0)
+        session.onLocation(lat(1.0), 0.0, 0.0, 1_000L, accuracyMeters = 5.0)
+        session.onLocation(lat(-1.0), 0.0, 0.0, 2_000L, accuracyMeters = 5.0)
+        session.onLocation(lat(1.0), 0.0, 0.0, 3_000L, accuracyMeters = 5.0)
+        session.onLocation(lat(-1.0), 0.0, 0.0, 4_000L, accuracyMeters = 5.0)
+
+        assertEquals(0.0, session.distanceMeters, 1e-9)
+    }
+
+    @Test
+    fun `慢速移动在累计位移超过门槛后仍会计入`() {
+        val session = RunSession()
+        session.start()
+        session.onLocation(0.0, 0.0, 0.0, 0L, accuracyMeters = 10.0)   // 门槛 5 米
+        session.onLocation(lat(3.0), 0.0, 0.0, 1_000L, accuracyMeters = 10.0)
+        // 3 米 < 5 米，暂不计入
+        assertEquals(0.0, session.distanceMeters, 1e-9)
+
+        // 累计到 6 米，超过门槛后一次性计入
+        session.onLocation(lat(6.0), 0.0, 0.0, 2_000L, accuracyMeters = 10.0)
+        assertEquals(6.0, session.distanceMeters, 0.05)
+    }
+
+    @Test
+    fun `正常跑动时门槛不影响距离累计`() {
+        val session = RunSession()
+        session.start()
+        // 精度 5 米 -> 门槛 2.5 米；每点 4 米，应全部计入
+        var latValue = 0.0
+        var time = 0L
+        repeat(10) {
+            session.onLocation(latValue, 0.0, 0.0, time, accuracyMeters = 5.0)
+            latValue += 4.0 / 111_194.93
+            time += 1_000L
+        }
+        // 9 段 x 4 米 ≈ 36 米
+        assertEquals(36.0, session.distanceMeters, 0.2)
     }
 
     @Test

@@ -7,6 +7,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.SystemClock
 import android.util.Log
+import com.run.tracker.util.AccelCadenceEstimator
 import com.run.tracker.util.CadenceSmoother
 import com.run.tracker.util.StepCalibrator
 import kotlinx.coroutines.CoroutineScope
@@ -21,15 +22,15 @@ import kotlin.math.roundToInt
 /**
  * 步频追踪：计算步频与本次跑步步数。
  *
- * 两个传感器分工：
- * - [Sensor.TYPE_STEP_COUNTER]：开机以来的累计步数，用来算「本次跑步步数」。
- *   但很多机型延迟/批量上报（实测这台 OPPO 系机型要走十几秒才有第一帧），
- *   直接拿它算步频会让开头长时间显示 0；
- * - [Sensor.TYPE_STEP_DETECTOR]：每走一步立即回调，用它驱动步频，响应快且连续；
- *   设备没有该传感器时才退化为用 counter 的累计值。
+ * 三个传感器分工：
+ * - [Sensor.TYPE_ACCELEROMETER]：**步频主数据源**。计步传感器每秒最多只回调 2~3 次
+ *   （实测封顶约 153 步/分），跑步步频 170+ 会被硬件截断，因此用加速度计自行检测迈步；
+ * - [Sensor.TYPE_STEP_COUNTER]：开机以来的累计步数，用来算「本次跑步步数」；
+ *   很多机型延迟/批量上报（实测要走十几秒才有第一帧）；
+ * - [Sensor.TYPE_STEP_DETECTOR]：每步回调一次，作为加速度计不可用时的步频兜底数据源。
  *
- * 步频统一交给 [CadenceSmoother] 做滑动窗口 + 平滑，并由 1 秒定时器驱动刷新，
- * 这样即使传感器没有新事件（停下来），数值也会按预期衰减。
+ * 加速度计估计由 [AccelCadenceEstimator] 完成，计步传感器路径由 [CadenceSmoother] 平滑，
+ * 两者都由 1 秒定时器刷新，停下后数值会衰减归零。
  */
 class StepCounterTracker(
     private val context: Context,
@@ -53,6 +54,9 @@ class StepCounterTracker(
 
     private val smoother = CadenceSmoother()
 
+    /** 加速度计步频估计（主数据源） */
+    private val accelEstimator = AccelCadenceEstimator()
+
     /** 自适应校准：某些机型 detector 会漏报，用 counter 的比例修正 */
     private val calibrator = StepCalibrator()
 
@@ -64,6 +68,8 @@ class StepCounterTracker(
     private var hasDetector = false
     /** 设备是否有 step_counter */
     private var hasCounter = false
+    /** 设备是否有加速度计 */
+    private var hasAccelerometer = false
 
     private var tickJob: Job? = null
 
@@ -110,16 +116,33 @@ class StepCounterTracker(
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
     }
 
+    /** 加速度计：步频主数据源（不受计步传感器每秒 2~3 次的上限限制） */
+    private val accelListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (event.sensor.type != Sensor.TYPE_ACCELEROMETER) return
+            accelEstimator.onSample(
+                SystemClock.elapsedRealtime(),
+                event.values[0],
+                event.values[1],
+                event.values[2]
+            )
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
+
     fun start() {
         reset()
 
         val counter = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
         val detector = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+        val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         hasCounter = counter != null
         hasDetector = detector != null
+        hasAccelerometer = accelerometer != null
 
-        if (counter == null && detector == null) {
-            // 没有计步相关传感器：保持 0，保证应用可运行
+        if (counter == null && detector == null && accelerometer == null) {
+            // 没有可用传感器：保持 0，保证应用可运行
             _cadence.value = 0
             return
         }
@@ -130,21 +153,28 @@ class StepCounterTracker(
         detector?.let {
             sensorManager.registerListener(detectorListener, it, SensorManager.SENSOR_DELAY_UI)
         }
+        // 20ms（50Hz）：3Hz 步频下每步约 16 个采样点，足够做迟滞检测
+        accelerometer?.let {
+            sensorManager.registerListener(accelListener, it, SensorManager.SENSOR_DELAY_GAME)
+        }
 
         // 每秒刷新一次步频：传感器无新事件时也要让数值衰减
         var tick = 0
         tickJob = scope.launch {
             while (isActive) {
                 delay(1_000)
-                val raw = smoother.cadence(SystemClock.elapsedRealtime())
-                val factor = calibrator.factor()
-                val calibrated = (raw * factor).roundToInt()
-                _cadence.value = calibrated.coerceIn(0, CadenceSmoother.MAX_CADENCE)
-                // 每 5 秒输出一次，便于在 Logcat 观察校准是否生效
+                val now = SystemClock.elapsedRealtime()
+                val accelCadence = accelEstimator.cadence(now)
+                val stepCadence = (smoother.cadence(now) * calibrator.factor()).roundToInt()
+                // 加速度计估出来的值优先；没有有效迈步时回退到计步传感器
+                val value = if (accelCadence > 0) accelCadence else stepCadence
+                _cadence.value = value.coerceIn(0, CadenceSmoother.MAX_CADENCE)
+
+                // 每 5 秒输出一次，便于在 Logcat 观察数据源与校准
                 if (++tick % 5 == 0) {
                     Log.d(
                         TAG,
-                        "cadence raw=$raw factor=%.2f -> %d".format(factor, _cadence.value)
+                        "cadence accel=$accelCadence step=$stepCadence -> ${_cadence.value}"
                     )
                 }
             }
@@ -154,6 +184,7 @@ class StepCounterTracker(
     fun stop() {
         sensorManager.unregisterListener(counterListener)
         sensorManager.unregisterListener(detectorListener)
+        sensorManager.unregisterListener(accelListener)
         tickJob?.cancel()
         tickJob = null
         reset()
@@ -163,6 +194,7 @@ class StepCounterTracker(
     fun reset() {
         smoother.reset()
         calibrator.reset()
+        accelEstimator.reset()
         baselineSteps = -1L
         detectorSteps = 0L
         _steps.value = 0L

@@ -26,6 +26,10 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         private const val MIN_POINT_DISTANCE_M = 0.5
         /** 精度差于该值（米）的定位点直接丢弃：室内漂移常见 30 米以上 */
         private const val MAX_ACCURACY_METERS = 30.0
+        /** 距离累加门槛随定位精度放大：精度 5 米时门槛约 2.5 米，过滤掉抖动累积 */
+        private const val ACCURACY_DISTANCE_FACTOR = 0.5
+        /** 门槛上限，避免精度很差时完全无法累计距离 */
+        private const val MAX_MIN_DISTANCE_M = 6.0
         /** 最大速度的滑动窗口长度（毫秒） */
         private const val SPEED_WINDOW_MS = 10_000L
         /** 窗口跨度不足该值时不计最大速度，避免单点跳变把峰值抬高 */
@@ -139,25 +143,42 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         // 精度过差的点直接丢弃（0 表示未知精度，按可用处理）
         if (accuracyMeters > MAX_ACCURACY_METERS) return
 
+        // 抖动过滤门槛：随定位精度放大（精度 5 米 -> 约 2.5 米），
+        // 低于门槛的位移不计入距离，避免 1Hz 采样下 GPS 噪声逐步累积
+        val minDistance = if (accuracyMeters > 0.0) {
+            (accuracyMeters * ACCURACY_DISTANCE_FACTOR)
+                .coerceIn(MIN_POINT_DISTANCE_M, MAX_MIN_DISTANCE_M)
+        } else {
+            MIN_POINT_DISTANCE_M
+        }
+
         val prev = lastLocation
+        var accepted = true
         if (prev != null) {
             val delta = LocationUtils.haversineDistanceMeters(
                 prev.first, prev.second, lat, lon
             )
             val dtSec = (timeMs - lastLocationTimeMs) / 1000.0
             val speed = if (dtSec > 0) delta / dtSec else 0.0
-            if (speed <= MAX_PLAUSIBLE_SPEED_MS && delta >= MIN_POINT_DISTANCE_M) {
+            if (speed <= MAX_PLAUSIBLE_SPEED_MS && delta >= minDistance) {
                 distanceMeters += delta
                 currentSpeedMs = speed
             } else {
                 // 噪声点：不累加距离，即时速度视为 0
                 currentSpeedMs = 0.0
+                accepted = false
             }
         } else {
             currentSpeedMs = 0.0
         }
-        lastLocation = lat to lon
-        lastLocationTimeMs = timeMs
+
+        // 只有被接受的点才作为下一次比较的参考：
+        // 这样慢速移动（每帧位移小于门槛）仍会在累计位移超过门槛后计入，
+        // 而原地抖动则永远不会被累加
+        if (accepted) {
+            lastLocation = lat to lon
+            lastLocationTimeMs = timeMs
+        }
 
         val point = TrackPoint(
             lat = lat,
