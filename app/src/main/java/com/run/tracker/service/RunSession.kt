@@ -232,11 +232,20 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         }
     }
 
+    /**
+     * 步频输入。
+     *
+     * 与心率不同，步频为 0 是**有效信息**（说明已经停下来），
+     * 因此 0 要能把界面上的数值清零，不能像以前那样忽略掉、
+     * 让最后一次的正数一直挂在界面上。
+     */
     fun onCadence(cad: Int) {
-        if (cad <= 0) return
+        if (cad < 0) return
         currentCadence = cad
-        cadenceSum += cad
-        cadenceCount++
+        if (cad > 0) {
+            cadenceSum += cad
+            cadenceCount++
+        }
         if (lastPoint != null && points.isNotEmpty()) {
             val last = points[points.size - 1]
             points[points.size - 1] = last.copy(cadence = cad)

@@ -279,8 +279,9 @@ class RunSessionTest {
         assertEquals(180, session.currentCadence)
         assertEquals(180, session.points.last().cadence)
 
+        // 步频为 0 表示停下来，界面应随之归零，但不影响平均值
         session.onCadence(0)
-        assertEquals(180, session.currentCadence)
+        assertEquals(0, session.currentCadence)
 
         session.onCadence(170)
         assertEquals(175, session.avgCadence())
