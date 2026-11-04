@@ -51,7 +51,8 @@ enum class HeartRateSource {
  * 3. **单次失败不再直接降级为模拟心率**，而是继续扫描 / 尝试下一个候选设备，
  *    直到 60 秒总时限才降级；
  * 4. 连接成功后若 12 秒内没能订阅上心率通知，判定失败并重来；
- * 5. Android 13+ 使用新的 writeDescriptor(descriptor, value) 接口。
+ * 5. Android 13+ 使用新的 writeDescriptor(descriptor, value) 接口；
+ * 6. 降级为模拟心率后仍每 30 秒后台重试一次，一旦对方 App 释放心率带即可自动接管。
  */
 class HeartRateManager(
     private val context: Context,
@@ -84,6 +85,8 @@ class HeartRateManager(
         private const val READY_TIMEOUT_MS = 12_000L
         /** 搜索总时长，超时才降级为模拟心率 */
         private const val SEARCH_TIMEOUT_MS = 60_000L
+        /** 降级为模拟心率后，仍每隔这么久尝试重新连接一次（心率带被其他 App 占用时很有用） */
+        private const val RETRY_INTERVAL_MS = 30_000L
         /** 仅按名称匹配的设备，扫描开始后延迟这么久再尝试 */
         private const val NAME_FALLBACK_DELAY_MS = 6_000L
 
@@ -108,6 +111,7 @@ class HeartRateManager(
     private var connectTimeoutJob: Job? = null
     private var readyTimeoutJob: Job? = null
     private var searchDeadlineJob: Job? = null
+    private var retryJob: Job? = null
 
     /** 管理器是否处于活跃状态（start/stop 控制） */
     private var isRunning = false
@@ -179,7 +183,7 @@ class HeartRateManager(
         restartSearchWindow()
 
         // 优先直连上次成功连接过的心率带
-        if (!tryDirectReconnect()) {
+        if (!tryDirectReconnect() && !tryBondedHeartRateDevice()) {
             startScan()
         }
     }
@@ -219,6 +223,18 @@ class HeartRateManager(
         connectTimeoutJob?.cancel(); connectTimeoutJob = null
         readyTimeoutJob?.cancel(); readyTimeoutJob = null
         searchDeadlineJob?.cancel(); searchDeadlineJob = null
+        retryJob?.cancel(); retryJob = null
+    }
+
+    /**
+     * 切到「搜索中」。
+     * 若当前已经在模拟心率，则保持模拟状态不动——
+     * 这样后台每 30 秒重试连接时，界面上的心率来源不会来回闪烁。
+     */
+    private fun markSearching() {
+        if (_source.value != HeartRateSource.SIMULATED) {
+            _source.value = HeartRateSource.SEARCHING
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -336,6 +352,35 @@ class HeartRateManager(
         return true
     }
 
+    /**
+     * 尝试已配对设备里看起来像心率带的设备。
+     *
+     * 心率带被其他 App 连着时通常已停止广播，扫描根本发现不了；
+     * 此时直接向已配对/已知设备发起连接是唯一可行的办法
+     * （最终能否建立第二条链路取决于心率带本身是否支持多连接）。
+     */
+    @SuppressLint("MissingPermission")
+    private fun tryBondedHeartRateDevice(): Boolean {
+        val adapter = bluetoothAdapter() ?: return false
+        val bonded = try {
+            adapter.bondedDevices
+        } catch (e: Exception) {
+            loge("bondedDevices error", e)
+            null
+        } ?: return false
+
+        val candidate = bonded.firstOrNull { device ->
+            device.address !in attemptedDevices &&
+                    device.name?.let { name ->
+                        HEART_RATE_NAME_HINTS.any { name.contains(it, ignoreCase = true) }
+                    } == true
+        } ?: return false
+
+        logd("bonded HR candidate: ${candidate.name} ${candidate.address}")
+        connectToDevice(candidate, CONNECT_TIMEOUT_MS)
+        return true
+    }
+
     // ---------------------------------------------------------------------
     // 连接
     // ---------------------------------------------------------------------
@@ -346,9 +391,10 @@ class HeartRateManager(
         connecting = true
         attemptedDevices.add(device.address)
         stopScan()
-        stopSimulation()
+        // 注意：这里不停止模拟心率。后台重试连接时继续保持心率显示，
+        // 只有真正连上（onDescriptorWrite）才切换数据源。
         closeGatt()
-        _source.value = HeartRateSource.SEARCHING
+        markSearching()
         logd("connecting: ${device.address} timeout=${timeoutMs}ms")
 
         bluetoothGatt = try {
@@ -391,7 +437,7 @@ class HeartRateManager(
             connectTimeoutJob?.cancel(); connectTimeoutJob = null
             readyTimeoutJob?.cancel(); readyTimeoutJob = null
             closeGatt()
-            _source.value = HeartRateSource.SEARCHING
+            markSearching()
 
             if (wasConnected) {
                 // 跑动途中掉线：重新给一次完整搜索窗口，优先直连原设备
@@ -664,8 +710,36 @@ class HeartRateManager(
 
     private fun fallbackToSimulation() {
         if (!isRunning || bleReady) return
-        logd("fallback to simulated")
+        logd("fallback to simulated, will keep retrying in background")
         _source.value = HeartRateSource.SIMULATED
         startSimulation()
+        scheduleRetry()
+    }
+
+    /**
+     * 降级为模拟心率后，仍然每隔 [RETRY_INTERVAL_MS] 尝试重新连接一次心率带。
+     *
+     * 典型场景：心率带正被另一个 App 占用（BLE 心率带通常只允许一条连接），
+     * 对方断开后我们能在半分钟内自动接管，而不必让用户重开一次跑步。
+     */
+    private fun scheduleRetry() {
+        retryJob?.cancel()
+        retryJob = scope.launch {
+            delay(RETRY_INTERVAL_MS)
+            if (!isRunning || bleReady) return@launch
+            logd("background retry: strap still unavailable, trying again")
+            // 重开一个搜索窗口，但界面保持「模拟心率」，不来回闪烁
+            searchDeadlineMs = SystemClock.elapsedRealtime() + SEARCH_TIMEOUT_MS
+
+            if (!tryDirectReconnect() && !tryBondedHeartRateDevice()) {
+                startScan()
+                // 本轮搜索同样限时：没找到就停下来，等下一轮重试，避免长时间空转耗电
+                delay(SEARCH_TIMEOUT_MS)
+                if (isRunning && !bleReady) {
+                    logd("background retry window ended, will retry later")
+                    stopScan()
+                    scheduleRetry()
+                }
+            }        }
     }
 }
