@@ -16,12 +16,17 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 /**
- * 步频追踪：使用 Step Counter（计步传感器）计算步频与本次跑步步数。
+ * 步频追踪：计算步频与本次跑步步数。
  *
- * Step Counter 传感器提供的是「开机以来」的累计步数，因此：
- * - 首次收到事件时记录基线，[steps] 输出「本次跑步步数 = 累计步数 - 基线」；
- * - 步频交给 [CadenceSmoother] 做滑动窗口 + 平滑，并由 1 秒定时器驱动刷新，
- *   这样即使传感器没有新事件（停下来），数值也会按预期衰减。
+ * 两个传感器分工：
+ * - [Sensor.TYPE_STEP_COUNTER]：开机以来的累计步数，用来算「本次跑步步数」。
+ *   但很多机型延迟/批量上报（实测这台 OPPO 系机型要走十几秒才有第一帧），
+ *   直接拿它算步频会让开头长时间显示 0；
+ * - [Sensor.TYPE_STEP_DETECTOR]：每走一步立即回调，用它驱动步频，响应快且连续；
+ *   设备没有该传感器时才退化为用 counter 的累计值。
+ *
+ * 步频统一交给 [CadenceSmoother] 做滑动窗口 + 平滑，并由 1 秒定时器驱动刷新，
+ * 这样即使传感器没有新事件（停下来），数值也会按预期衰减。
  */
 class StepCounterTracker(
     private val context: Context,
@@ -43,13 +48,20 @@ class StepCounterTracker(
 
     /** 起跑时的传感器累计步数，-1 表示尚未记录基线 */
     private var baselineSteps = -1L
+    /** step_detector 累计的步数（每步 +1） */
+    private var detectorSteps = 0L
+    /** 设备是否有独立的 step_detector */
+    private var hasDetector = false
+    /** 设备是否有 step_counter */
+    private var hasCounter = false
+
     private var tickJob: Job? = null
 
-    private val listener = object : SensorEventListener {
+    /** 计步器：负责累计步数；没有 detector 时才兼职喂步频 */
+    private val counterListener = object : SensorEventListener {
         override fun onSensorChanged(event: SensorEvent) {
             if (event.sensor.type != Sensor.TYPE_STEP_COUNTER) return
             val totalSteps = event.values[0].toLong()
-            val now = SystemClock.elapsedRealtime()
 
             // 第一帧只记录基线，本次跑步从 0 步开始
             if (baselineSteps < 0) {
@@ -59,7 +71,23 @@ class StepCounterTracker(
             }
 
             _steps.value = (totalSteps - baselineSteps).coerceAtLeast(0L)
-            smoother.onStep(now, totalSteps)
+            if (!hasDetector) {
+                smoother.onStep(SystemClock.elapsedRealtime(), totalSteps)
+            }
+        }
+
+        override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    }
+
+    /** 步态检测：每走一步回调一次，是步频的主要数据源 */
+    private val detectorListener = object : SensorEventListener {
+        override fun onSensorChanged(event: SensorEvent) {
+            if (event.sensor.type != Sensor.TYPE_STEP_DETECTOR) return
+            detectorSteps += 1
+            smoother.onStep(SystemClock.elapsedRealtime(), detectorSteps)
+            if (!hasCounter) {
+                _steps.value = detectorSteps
+            }
         }
 
         override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
@@ -67,13 +95,24 @@ class StepCounterTracker(
 
     fun start() {
         reset()
-        val sensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
-        if (sensor == null) {
-            // 无计步传感器时保持 0，保证应用可运行
+
+        val counter = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
+        val detector = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+        hasCounter = counter != null
+        hasDetector = detector != null
+
+        if (counter == null && detector == null) {
+            // 没有计步相关传感器：保持 0，保证应用可运行
             _cadence.value = 0
             return
         }
-        sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_UI)
+
+        counter?.let {
+            sensorManager.registerListener(counterListener, it, SensorManager.SENSOR_DELAY_UI)
+        }
+        detector?.let {
+            sensorManager.registerListener(detectorListener, it, SensorManager.SENSOR_DELAY_UI)
+        }
 
         // 每秒刷新一次步频：传感器无新事件时也要让数值衰减
         tickJob = scope.launch {
@@ -85,7 +124,8 @@ class StepCounterTracker(
     }
 
     fun stop() {
-        sensorManager.unregisterListener(listener)
+        sensorManager.unregisterListener(counterListener)
+        sensorManager.unregisterListener(detectorListener)
         tickJob?.cancel()
         tickJob = null
         reset()
@@ -95,6 +135,7 @@ class StepCounterTracker(
     fun reset() {
         smoother.reset()
         baselineSteps = -1L
+        detectorSteps = 0L
         _steps.value = 0L
         _cadence.value = 0
     }
