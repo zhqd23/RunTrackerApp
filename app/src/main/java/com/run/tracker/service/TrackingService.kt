@@ -183,28 +183,40 @@ class TrackingService : Service() {
             maxHeartRate = session.maxHeartRate,
             avgCadence = session.avgCadence(),
             calories = session.calories(),
-            trackPoints = session.points.toList()
+            trackPoints = session.points
         )
 
-        // 结束：UI 复位到初始状态。本次数据已经存库，明细可在「记录」里查看，
-        // 不应继续显示上一次跑步的心率与「蓝牙已连接」。
-        _uiState.value = RunUiState(heartRateSource = heartRateManager.source.value)
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        nm.cancel(NOTIFICATION_ID)
-
-        // 落库必须在服务销毁前完成：onDestroy 会 cancel(serviceScope)，
-        // 因此用 NonCancellable 保护写入，写完后才 stopSelf
         val app = application as RunTrackerApp
+
+        // 1) 先把记录同步暂存到本地：即使后面任何一步崩溃，下次启动也能补写回来
+        try {
+            app.pendingRunStore.save(record)
+        } catch (e: Exception) {
+            Log.e(TAG, "暂存跑步记录失败", e)
+        }
+
+        // 2) 再异步写数据库；写成功才清除暂存
         serviceScope.launch {
             withContext(NonCancellable) {
                 try {
                     app.repository.insert(record)
+                    app.pendingRunStore.clear()
                 } catch (e: Exception) {
-                    Log.e(TAG, "保存跑步记录失败", e)
+                    Log.e(TAG, "保存跑步记录失败，保留暂存以便下次恢复", e)
                 }
             }
             stopSelf()
+        }
+
+        // 3) 最后做 UI / 通知收尾。这一步出任何问题都不该影响已经暂存的数据，
+        //    更不能让异常冒泡导致整个前台服务进程崩溃。
+        try {
+            _uiState.value = RunUiState(heartRateSource = heartRateManager.source.value)
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+            nm.cancel(NOTIFICATION_ID)
+        } catch (e: Exception) {
+            Log.e(TAG, "结束跑步的界面收尾失败", e)
         }
     }
 

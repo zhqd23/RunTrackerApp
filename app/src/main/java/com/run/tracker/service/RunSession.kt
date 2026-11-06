@@ -78,11 +78,24 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
     var totalSteps: Long = 0
         private set
 
-    val points: MutableList<TrackPoint> = mutableListOf()
+    /** 轨迹点：由多个采集线程写入（定位 / 心率 / 步频），必须加锁访问 */
+    private val pointsLock = Any()
+    private val mutablePoints = mutableListOf<TrackPoint>()
+
+    /**
+     * 轨迹点快照。
+     * 返回的是复制后的只读列表，UI 与落库都在其他线程读取，
+     * 直接用可变列表会出现「写入过程中被遍历」的并发问题。
+     */
+    val points: List<TrackPoint>
+        get() = synchronized(pointsLock) { mutablePoints.toList() }
+
+    /** 轨迹点数量（避免为了取长度复制整个列表） */
+    val pointCount: Int
+        get() = synchronized(pointsLock) { mutablePoints.size }
 
     private var lastLocation: Pair<Double, Double>? = null
     private var lastLocationTimeMs: Long = 0L
-    private var lastPoint: TrackPoint? = null
 
     /** 滤波后的位置（用于距离计算，抑制 GPS 抖动带来的系统性偏长） */
     private var filteredLat: Double = 0.0
@@ -105,9 +118,8 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         startTimeMs = System.currentTimeMillis()
         runningStartTimeMs = startTimeMs
         accumulatedRunningMs = 0L
-        points.clear()
+        synchronized(pointsLock) { mutablePoints.clear() }
         lastLocation = null
-        lastPoint = null
         hasFilteredPosition = false
         distanceMeters = 0.0
         maxSpeedMs = 0.0
@@ -247,8 +259,7 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
             heartRate = currentHeartRate,
             cadence = currentCadence
         )
-        points.add(point)
-        lastPoint = point
+        synchronized(pointsLock) { mutablePoints.add(point) }
 
         updateSmoothedMaxSpeed(timeMs)
     }
@@ -284,9 +295,11 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         heartRateCount++
         if (hr > maxHeartRate) maxHeartRate = hr
         // 更新最后一个点的心率
-        if (lastPoint != null && points.isNotEmpty()) {
-            val last = points[points.size - 1]
-            points[points.size - 1] = last.copy(heartRate = hr)
+        synchronized(pointsLock) {
+            if (mutablePoints.isNotEmpty()) {
+                val last = mutablePoints[mutablePoints.size - 1]
+                mutablePoints[mutablePoints.size - 1] = last.copy(heartRate = hr)
+            }
         }
     }
 
@@ -304,9 +317,11 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
             cadenceSum += cad
             cadenceCount++
         }
-        if (lastPoint != null && points.isNotEmpty()) {
-            val last = points[points.size - 1]
-            points[points.size - 1] = last.copy(cadence = cad)
+        synchronized(pointsLock) {
+            if (mutablePoints.isNotEmpty()) {
+                val last = mutablePoints[mutablePoints.size - 1]
+                mutablePoints[mutablePoints.size - 1] = last.copy(cadence = cad)
+            }
         }
     }
 
