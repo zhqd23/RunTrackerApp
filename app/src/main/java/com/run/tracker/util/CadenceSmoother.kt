@@ -30,13 +30,15 @@ class CadenceSmoother(
     /** 平滑后的步频 */
     private var smoothed = 0.0
 
-    /** 记录一次计步采样 */
+    /** 记录一次计步采样（传感器回调线程） */
+    @Synchronized
     fun onStep(timeMs: Long, totalSteps: Long) {
         samples.addLast(timeMs to totalSteps)
         trim(timeMs)
     }
 
-    /** 计算当前应显示的步频（步/分钟） */
+    /** 计算当前应显示的步频（定时器线程；与 [onStep] 共享状态，需加锁） */
+    @Synchronized
     fun cadence(nowMs: Long): Int {
         trim(nowMs)
 
@@ -61,6 +63,7 @@ class CadenceSmoother(
     }
 
     /** 清空全部状态（每次开始记录前调用） */
+    @Synchronized
     fun reset() {
         samples.clear()
         smoothed = 0.0

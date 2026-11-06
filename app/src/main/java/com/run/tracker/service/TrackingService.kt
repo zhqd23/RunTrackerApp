@@ -188,6 +188,17 @@ class TrackingService : Service() {
 
         val app = application as RunTrackerApp
 
+        // 诊断日志：距离是否偏长与平均定位精度强相关，下次反馈时可直接对照
+        Log.i(
+            TAG,
+            "本次跑步：距离=%.0f m 用时=%.1f s 平均精度=%.1f m 轨迹点=%d".format(
+                session.distanceMeters,
+                session.elapsedMs() / 1000.0,
+                session.avgAccuracyMeters(),
+                session.pointCount
+            )
+        )
+
         // 1) 先把记录同步暂存到本地：即使后面任何一步崩溃，下次启动也能补写回来
         try {
             app.pendingRunStore.save(record)

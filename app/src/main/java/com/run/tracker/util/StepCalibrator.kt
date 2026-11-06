@@ -34,7 +34,8 @@ class StepCalibrator(
 
     private var factor = 1.0
 
-    /** 记录一次 counter 上报（必须同时给出此刻的 detector 计数） */
+    /** 记录一次 counter 上报（传感器回调线程） */
+    @Synchronized
     fun onCounterSample(timeMs: Long, counterSteps: Long, detectorSteps: Long) {
         samples.addLast(Triple(timeMs, counterSteps, detectorSteps))
         while (samples.size > 2 && timeMs - samples.first().first > windowMs) {
@@ -43,9 +44,11 @@ class StepCalibrator(
         updateFactor()
     }
 
-    /** 当前校准系数，1.0 表示不校准 */
+    /** 当前校准系数，1.0 表示不校准（定时器线程读取） */
+    @Synchronized
     fun factor(): Double = factor
 
+    @Synchronized
     fun reset() {
         samples.clear()
         factor = 1.0

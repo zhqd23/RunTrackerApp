@@ -1,4 +1,4 @@
-package com.run.tracker.service
+﻿package com.run.tracker.service
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -134,19 +134,14 @@ class RunSessionTest {
         assertEquals(120.0, session.distanceMeters, 10.0)
     }
 
-    @Test
-    fun `模拟 GPS 噪声下的距离误差应小于百分之一`() {
-        val session = RunSession()
-        session.start()
-
+    /** 用合成轨迹 + 高斯噪声跑一段，返回距离误差百分比 */
+    private fun simulateWithNoise(session: RunSession, noiseSigma: Double, seconds: Int = 1000): Double {
         val random = java.util.Random(7)
-        val stepMeters = 3.0   // 每秒前进 3 米（约 5'33" 配速）
-        val noiseSigma = 1.0   // 每轴 1 米噪声
+        val stepMeters = 3.0
         var trueDistance = 0.0
         var time = 0L
-
-        session.onLocation(0.0, 0.0, 0.0, time, accuracyMeters = 4.0)
-        repeat(1000) {
+        session.onLocation(0.0, 0.0, 0.0, time, accuracyMeters = noiseSigma * 4)
+        repeat(seconds) {
             trueDistance += stepMeters
             time += 1_000L
             val latNoise = random.nextGaussian() * noiseSigma
@@ -156,16 +151,28 @@ class RunSessionTest {
                 lat(lonNoise),
                 0.0,
                 time,
-                accuracyMeters = 4.0
+                accuracyMeters = noiseSigma * 4
             )
         }
+        val error = (session.distanceMeters - trueDistance) / trueDistance * 100.0
+        println("noise=${noiseSigma}m 误差=%.2f%% 测得=%.0fm 真实=%.0fm".format(error, session.distanceMeters, trueDistance))
+        return error
+    }
 
-        val errorPercent = (session.distanceMeters - trueDistance) / trueDistance * 100.0
-        assertTrue(
-            "距离误差应小于 1%%，实际 %.2f%%（测得 %.0f m / 真实 %.0f m）"
-                .format(errorPercent, session.distanceMeters, trueDistance),
-            errorPercent < 1.0
-        )
+    @Test
+    fun `模拟 GPS 噪声下的距离误差应小于百分之一`() {
+        val session = RunSession()
+        session.start()
+        val error = simulateWithNoise(session, noiseSigma = 1.0)
+        assertTrue("σ=1m 时误差应小于 1%%，实际 %.2f%%".format(error), error < 1.0)
+    }
+
+    @Test
+    fun `较强 GPS 噪声下距离误差应小于百分之三`() {
+        val session = RunSession()
+        session.start()
+        val error = simulateWithNoise(session, noiseSigma = 2.0)
+        assertTrue("σ=2m 时误差应小于 3%%，实际 %.2f%%".format(error), error < 3.0)
     }
 
     @Test
@@ -345,3 +352,4 @@ class RunSessionTest {
         assertTrue(session.calories() < 0.1)
     }
 }
+

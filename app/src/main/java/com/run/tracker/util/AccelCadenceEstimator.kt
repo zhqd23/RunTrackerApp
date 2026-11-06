@@ -49,7 +49,14 @@ class AccelCadenceEstimator(
     /** 平滑后的步频输出 */
     private var smoothedCadence = 0.0
 
-    /** 喂入一次加速度采样（单位 m/s²） */
+    /**
+     * 喂入一次加速度采样（单位 m/s²）。
+     *
+     * 该方法在传感器回调线程执行，而 [cadence] 在 1 秒定时器线程执行，
+     * 两者共享 [intervals] 等状态，必须加锁——否则排序时可能读到并发清空的槽位
+     * 而抛出 NullPointerException（真机崩溃栈确认过）。
+     */
+    @Synchronized
     fun onSample(timeMs: Long, x: Float, y: Float, z: Float) {
         val magnitude = sqrt(x.toDouble() * x + y.toDouble() * y + z.toDouble() * z)
 
@@ -82,6 +89,7 @@ class AccelCadenceEstimator(
     }
 
     /** 当前步频（步/分钟），0 表示没有检测到连续跑动 */
+    @Synchronized
     fun cadence(nowMs: Long): Int {
         if (lastStepTimeMs <= 0) return 0
         if (nowMs - lastStepTimeMs > staleMs) {
@@ -100,6 +108,7 @@ class AccelCadenceEstimator(
         return smoothedCadence.roundToInt().coerceIn(0, MAX_CADENCE)
     }
 
+    @Synchronized
     fun reset() {
         gravityBaseline = 0.0
         amplitudeEma = 0.0

@@ -24,14 +24,14 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         private const val MAX_PLAUSIBLE_SPEED_MS = 12.0
         /** 低于该距离（米）的定位漂移不累加 */
         private const val MIN_POINT_DISTANCE_M = 0.5
-        /** 精度差于该值（米）的定位点直接丢弃：室内漂移常见 30 米以上 */
-        private const val MAX_ACCURACY_METERS = 30.0
+        /** 精度差于该值（米）的定位点直接丢弃：20 米以上的点对距离贡献的多是噪声 */
+        private const val MAX_ACCURACY_METERS = 15.0
         /** 距离累加门槛随定位精度放大：精度 5 米时门槛约 2.5 米，过滤掉抖动累积 */
         private const val ACCURACY_DISTANCE_FACTOR = 0.5
         /** 有精度信息时的最小累加间距：间距越大，噪声造成的相对误差越小 */
-        private const val MIN_DISTANCE_WITH_ACCURACY = 5.0
+        private const val MIN_DISTANCE_WITH_ACCURACY = 8.0
         /** 门槛上限，避免精度很差时完全无法累计距离 */
-        private const val MAX_MIN_DISTANCE_M = 8.0
+        private const val MAX_MIN_DISTANCE_M = 12.0
         /**
          * 位置 alpha-beta 滤波系数。
          * alpha 决定「向实测值修正」的力度，beta 决定速度估计的跟随速度；
@@ -69,6 +69,10 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         private set
     private var heartRateSum: Long = 0
     private var heartRateCount: Int = 0
+
+    /** 定位精度累计，用于诊断「距离偏长」是否由 GPS 质量引起 */
+    private var accuracySum: Double = 0.0
+    private var accuracyCount: Int = 0
 
     var currentCadence: Int = 0
         private set
@@ -128,6 +132,8 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         maxHeartRate = 0
         heartRateSum = 0
         heartRateCount = 0
+        accuracySum = 0.0
+        accuracyCount = 0
         currentCadence = 0
         cadenceSum = 0
         cadenceCount = 0
@@ -174,6 +180,11 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         if (state != RunState.RUNNING) return
         // 精度过差的点直接丢弃（0 表示未知精度，按可用处理）
         if (accuracyMeters > MAX_ACCURACY_METERS) return
+
+        if (accuracyMeters > 0.0) {
+            accuracySum += accuracyMeters
+            accuracyCount++
+        }
 
         // 抖动过滤门槛：既随定位精度放大，也保证一个最小位移量。
         // 距离误差约与 σ²/(2d) 成正比，d 是相邻累加点间距；
@@ -351,6 +362,10 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
     fun avgHeartRate(): Int =
         if (heartRateCount == 0) 0 else (heartRateSum / heartRateCount).toInt()
 
+    /** 本次跑步的平均定位精度（米），没有数据时返回 0 */
+    fun avgAccuracyMeters(): Double =
+        if (accuracyCount == 0) 0.0 else accuracySum / accuracyCount
+
     fun avgCadence(): Int =
         if (cadenceCount == 0) 0 else (cadenceSum / cadenceCount).toInt()
 
@@ -360,3 +375,4 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         return 9.8 * weightKg * hours
     }
 }
+

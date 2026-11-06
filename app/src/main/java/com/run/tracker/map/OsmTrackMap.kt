@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.graphics.Color
 import android.location.Location
 import android.location.LocationManager
+import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -170,10 +171,16 @@ fun OsmTrackMap(
 
     /** 按当前轨迹数据重绘一次（点数没变则跳过） */
     fun drawOnce(view: MapView) {
+        if (!view.isAttachedToWindow || view.repository == null) return
         if (renderedSize == points.size) return
         renderedSize = points.size
-        val newKey = updateTrack(view, points, autoFollow, followKey)
-        if (newKey != null) followKey = newKey
+        try {
+            val newKey = updateTrack(view, points, autoFollow, followKey)
+            if (newKey != null) followKey = newKey
+        } catch (e: Exception) {
+            // 地图绘制失败不能拖垮整个界面
+            Log.e("OsmTrackMap", "绘制轨迹失败", e)
+        }
     }
 
     AndroidView(
@@ -202,6 +209,10 @@ private fun updateTrack(
     autoFollow: Boolean,
     currentFollowKey: Int
 ): Int? {
+    // 地图已经 detach 时 repository 会被清空，此时创建 Marker / 缩放都会抛 NPE
+    // （真机崩溃栈：updateTrack -> Marker -> getRepository() null）
+    if (map.repository == null) return null
+
     map.overlays.clear()
     // 清空后重新挂上版权署名（高德要求展示）
     copyrightOverlays[map]?.let { map.overlays.add(it) }
