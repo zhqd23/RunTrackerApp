@@ -166,8 +166,9 @@ class StepCounterTracker(
                 val now = SystemClock.elapsedRealtime()
                 val accelCadence = accelEstimator.cadence(now)
                 val stepCadence = (smoother.cadence(now) * calibrator.factor()).roundToInt()
-                // 加速度计估出来的值优先；没有有效迈步时回退到计步传感器
-                val value = if (accelCadence > 0) accelCadence else stepCadence
+                // 有加速度计时只用它：两种数据源量级差很多（实测 190 vs 65），
+                // 来回切换会让瞬时步频看起来「飘忽」
+                val value = if (hasAccelerometer) accelCadence else stepCadence
                 _cadence.value = value.coerceIn(0, CadenceSmoother.MAX_CADENCE)
 
                 // 每 5 秒输出一次，便于在 Logcat 观察数据源与校准

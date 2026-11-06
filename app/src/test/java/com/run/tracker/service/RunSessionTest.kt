@@ -72,22 +72,27 @@ class RunSessionTest {
     }
 
     @Test
-    fun `精度正常的定位点正常记录`() {
+    fun `精度正常的定位点正常记录并累计距离`() {
         val session = RunSession()
         session.start()
-        // 精度 3 米 -> 距离门槛 1.5 米，2.22 米的位移可以计入
-        session.onLocation(0.0, 0.0, 0.0, 0L, accuracyMeters = 3.0)
-        session.onLocation(stepLat, 0.0, 0.0, 1_000L, accuracyMeters = 3.0)
-
-        assertEquals(2, session.points.size)
-        assertEquals(2.2239, session.distanceMeters, 0.01)
+        // 每秒 3 米、共 40 秒，精度 3 米
+        var latValue = 0.0
+        var time = 0L
+        repeat(41) {
+            session.onLocation(latValue, 0.0, 0.0, time, accuracyMeters = 3.0)
+            latValue += 3.0 / 111_194.93
+            time += 1_000L
+        }
+        assertEquals(41, session.points.size)
+        // 40 段 x 3 米 = 120 米；允许滤波启动阶段的少量损失
+        assertEquals(120.0, session.distanceMeters, 10.0)
     }
 
     @Test
     fun `原地抖动不会累积距离`() {
         val session = RunSession()
         session.start()
-        // 精度 5 米 -> 门槛 2.5 米；在 ±1 米之间来回抖动，全部低于门槛
+        // 在 ±1 米之间来回抖动：位置经平滑后几乎不动，不会累加
         session.onLocation(0.0, 0.0, 0.0, 0L, accuracyMeters = 5.0)
         session.onLocation(lat(1.0), 0.0, 0.0, 1_000L, accuracyMeters = 5.0)
         session.onLocation(lat(-1.0), 0.0, 0.0, 2_000L, accuracyMeters = 5.0)
@@ -98,33 +103,69 @@ class RunSessionTest {
     }
 
     @Test
-    fun `慢速移动在累计位移超过门槛后仍会计入`() {
+    fun `慢速移动仍能累计距离`() {
         val session = RunSession()
         session.start()
-        session.onLocation(0.0, 0.0, 0.0, 0L, accuracyMeters = 10.0)   // 门槛 5 米
-        session.onLocation(lat(3.0), 0.0, 0.0, 1_000L, accuracyMeters = 10.0)
-        // 3 米 < 5 米，暂不计入
-        assertEquals(0.0, session.distanceMeters, 1e-9)
-
-        // 累计到 6 米，超过门槛后一次性计入
-        session.onLocation(lat(6.0), 0.0, 0.0, 2_000L, accuracyMeters = 10.0)
-        assertEquals(6.0, session.distanceMeters, 0.05)
+        // 每秒 3 米、精度 10 米（门槛 5 米）、共 30 秒
+        var latValue = 0.0
+        var time = 0L
+        repeat(31) {
+            session.onLocation(latValue, 0.0, 0.0, time, accuracyMeters = 10.0)
+            latValue += 3.0 / 111_194.93
+            time += 1_000L
+        }
+        // 30 段 x 3 米 = 90 米
+        assertEquals(90.0, session.distanceMeters, 10.0)
     }
 
     @Test
     fun `正常跑动时门槛不影响距离累计`() {
         val session = RunSession()
         session.start()
-        // 精度 5 米 -> 门槛 2.5 米；每点 4 米，应全部计入
+        // 每秒 4 米、精度 5 米、共 30 秒
         var latValue = 0.0
         var time = 0L
-        repeat(10) {
+        repeat(31) {
             session.onLocation(latValue, 0.0, 0.0, time, accuracyMeters = 5.0)
             latValue += 4.0 / 111_194.93
             time += 1_000L
         }
-        // 9 段 x 4 米 ≈ 36 米
-        assertEquals(36.0, session.distanceMeters, 0.2)
+        // 30 段 x 4 米 = 120 米
+        assertEquals(120.0, session.distanceMeters, 10.0)
+    }
+
+    @Test
+    fun `模拟 GPS 噪声下的距离误差应小于百分之一`() {
+        val session = RunSession()
+        session.start()
+
+        val random = java.util.Random(7)
+        val stepMeters = 3.0   // 每秒前进 3 米（约 5'33" 配速）
+        val noiseSigma = 1.0   // 每轴 1 米噪声
+        var trueDistance = 0.0
+        var time = 0L
+
+        session.onLocation(0.0, 0.0, 0.0, time, accuracyMeters = 4.0)
+        repeat(1000) {
+            trueDistance += stepMeters
+            time += 1_000L
+            val latNoise = random.nextGaussian() * noiseSigma
+            val lonNoise = random.nextGaussian() * noiseSigma
+            session.onLocation(
+                lat(trueDistance + latNoise),
+                lat(lonNoise),
+                0.0,
+                time,
+                accuracyMeters = 4.0
+            )
+        }
+
+        val errorPercent = (session.distanceMeters - trueDistance) / trueDistance * 100.0
+        assertTrue(
+            "距离误差应小于 1%%，实际 %.2f%%（测得 %.0f m / 真实 %.0f m）"
+                .format(errorPercent, session.distanceMeters, trueDistance),
+            errorPercent < 1.0
+        )
     }
 
     @Test

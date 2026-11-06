@@ -34,6 +34,8 @@ class AccelCadenceEstimator(
         const val MAX_CADENCE = 240
         /** 阈值下限，避免静止时噪声被当成步 */
         private const val MIN_THRESHOLD = 0.35
+        /** 输出平滑系数：越小越稳，但跟随变化越慢 */
+        private const val OUTPUT_SMOOTHING = 0.4
     }
 
     /** 重力基线（低通） */
@@ -44,6 +46,8 @@ class AccelCadenceEstimator(
     private var rising = false
     private var lastStepTimeMs = 0L
     private val intervals = ArrayDeque<Long>()
+    /** 平滑后的步频输出 */
+    private var smoothedCadence = 0.0
 
     /** 喂入一次加速度采样（单位 m/s²） */
     fun onSample(timeMs: Long, x: Float, y: Float, z: Float) {
@@ -82,13 +86,18 @@ class AccelCadenceEstimator(
         if (lastStepTimeMs <= 0) return 0
         if (nowMs - lastStepTimeMs > staleMs) {
             intervals.clear()
+            smoothedCadence = 0.0
             return 0
         }
-        if (intervals.size < 2) return 0
+        if (intervals.size < 2) return smoothedCadence.roundToInt()
 
         val sorted = intervals.sorted()
         val median = sorted[sorted.size / 2]
-        return (60_000.0 / median).roundToInt().coerceIn(0, MAX_CADENCE)
+        val raw = (60_000.0 / median).coerceIn(0.0, MAX_CADENCE.toDouble())
+        // 再做一次 EMA，抑制个别间隔抖动造成的瞬时跳变
+        smoothedCadence = if (smoothedCadence <= 0.0) raw
+        else smoothedCadence * (1 - OUTPUT_SMOOTHING) + raw * OUTPUT_SMOOTHING
+        return smoothedCadence.roundToInt().coerceIn(0, MAX_CADENCE)
     }
 
     fun reset() {

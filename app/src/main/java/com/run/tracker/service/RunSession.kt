@@ -28,8 +28,17 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         private const val MAX_ACCURACY_METERS = 30.0
         /** 距离累加门槛随定位精度放大：精度 5 米时门槛约 2.5 米，过滤掉抖动累积 */
         private const val ACCURACY_DISTANCE_FACTOR = 0.5
+        /** 有精度信息时的最小累加间距：间距越大，噪声造成的相对误差越小 */
+        private const val MIN_DISTANCE_WITH_ACCURACY = 5.0
         /** 门槛上限，避免精度很差时完全无法累计距离 */
-        private const val MAX_MIN_DISTANCE_M = 6.0
+        private const val MAX_MIN_DISTANCE_M = 8.0
+        /**
+         * 位置 alpha-beta 滤波系数。
+         * alpha 决定「向实测值修正」的力度，beta 决定速度估计的跟随速度；
+         * 0.5 / 0.2 时对 1Hz 的 GPS 噪声有明显抑制，同时对加减速响应及时。
+         */
+        private const val POSITION_FILTER_ALPHA = 0.5
+        private const val POSITION_VELOCITY_BETA = 0.2
         /** 最大速度的滑动窗口长度（毫秒） */
         private const val SPEED_WINDOW_MS = 10_000L
         /** 窗口跨度不足该值时不计最大速度，避免单点跳变把峰值抬高 */
@@ -75,6 +84,15 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
     private var lastLocationTimeMs: Long = 0L
     private var lastPoint: TrackPoint? = null
 
+    /** 滤波后的位置（用于距离计算，抑制 GPS 抖动带来的系统性偏长） */
+    private var filteredLat: Double = 0.0
+    private var filteredLon: Double = 0.0
+    /** 滤波估计出的速度（度/秒），用于位置预测 */
+    private var velocityLat: Double = 0.0
+    private var velocityLon: Double = 0.0
+    private var lastFilterTimeMs: Long = 0L
+    private var hasFilteredPosition = false
+
     /** (时间戳, 累计距离) 采样，用于滑动窗口计算平滑速度 */
     private val speedSamples = ArrayDeque<Pair<Long, Double>>()
 
@@ -90,6 +108,7 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         points.clear()
         lastLocation = null
         lastPoint = null
+        hasFilteredPosition = false
         distanceMeters = 0.0
         maxSpeedMs = 0.0
         currentSpeedMs = 0.0
@@ -111,6 +130,7 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         // 清空上一参考点：暂停期间的位移不计入距离，恢复后从新点位重新起算
         lastLocation = null
         lastLocationTimeMs = 0L
+        hasFilteredPosition = false
         currentSpeedMs = 0.0
     }
 
@@ -143,20 +163,58 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         // 精度过差的点直接丢弃（0 表示未知精度，按可用处理）
         if (accuracyMeters > MAX_ACCURACY_METERS) return
 
-        // 抖动过滤门槛：随定位精度放大（精度 5 米 -> 约 2.5 米），
-        // 低于门槛的位移不计入距离，避免 1Hz 采样下 GPS 噪声逐步累积
+        // 抖动过滤门槛：既随定位精度放大，也保证一个最小位移量。
+        // 距离误差约与 σ²/(2d) 成正比，d 是相邻累加点间距；
+        // 把 d 从 3 米提到 5~6 米，单靠这一项就能把偏差降一半以上。
         val minDistance = if (accuracyMeters > 0.0) {
             (accuracyMeters * ACCURACY_DISTANCE_FACTOR)
-                .coerceIn(MIN_POINT_DISTANCE_M, MAX_MIN_DISTANCE_M)
+                .coerceIn(MIN_DISTANCE_WITH_ACCURACY, MAX_MIN_DISTANCE_M)
         } else {
             MIN_POINT_DISTANCE_M
+        }
+
+        // 位置先用 alpha-beta 滤波再算距离。
+        // 距离是逐段长度累加，噪声会让每段都系统性偏长（误差 ≈ σ²/2d），
+        // 平滑把 σ 压小后这部分偏差按平方下降。
+        // 与单纯指数平滑的区别：这里用速度预测位置，匀速跑动时**没有稳态滞后**，
+        // 因此不会像 EMA 那样在开跑最初十几秒少算一截距离。
+        if (accuracyMeters > 0.0) {
+            if (!hasFilteredPosition) {
+                filteredLat = lat
+                filteredLon = lon
+                velocityLat = 0.0
+                velocityLon = 0.0
+                lastFilterTimeMs = timeMs
+                hasFilteredPosition = true
+            } else {
+                val dtSec = (timeMs - lastFilterTimeMs) / 1000.0
+                if (dtSec > 0) {
+                    // 1) 用估计速度预测当前位置
+                    val predictedLat = filteredLat + velocityLat * dtSec
+                    val predictedLon = filteredLon + velocityLon * dtSec
+                    // 2) 用实测值修正位置
+                    val residualLat = lat - predictedLat
+                    val residualLon = lon - predictedLon
+                    filteredLat = predictedLat + POSITION_FILTER_ALPHA * residualLat
+                    filteredLon = predictedLon + POSITION_FILTER_ALPHA * residualLon
+                    // 3) 用修正量更新速度估计
+                    velocityLat += POSITION_VELOCITY_BETA * residualLat / dtSec
+                    velocityLon += POSITION_VELOCITY_BETA * residualLon / dtSec
+                    lastFilterTimeMs = timeMs
+                }
+            }
+        } else {
+            // 没有精度信息（例如单元测试或异常数据）时按原始坐标处理
+            filteredLat = lat
+            filteredLon = lon
+            hasFilteredPosition = true
         }
 
         val prev = lastLocation
         var accepted = true
         if (prev != null) {
             val delta = LocationUtils.haversineDistanceMeters(
-                prev.first, prev.second, lat, lon
+                prev.first, prev.second, filteredLat, filteredLon
             )
             val dtSec = (timeMs - lastLocationTimeMs) / 1000.0
             val speed = if (dtSec > 0) delta / dtSec else 0.0
@@ -176,7 +234,7 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
         // 这样慢速移动（每帧位移小于门槛）仍会在累计位移超过门槛后计入，
         // 而原地抖动则永远不会被累加
         if (accepted) {
-            lastLocation = lat to lon
+            lastLocation = filteredLat to filteredLon
             lastLocationTimeMs = timeMs
         }
 

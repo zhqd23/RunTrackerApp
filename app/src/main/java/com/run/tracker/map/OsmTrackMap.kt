@@ -155,6 +155,11 @@ fun OsmTrackMap(
                 }
             }
             lifecycleOwner.lifecycle.addObserver(observer)
+            // 详情页是在 Activity 已经 RESUMED 时打开的组合，不会再收到 ON_RESUME 事件，
+            // 因此这里主动 resume 一次，否则 osmdroid 不会开始加载瓦片、也不会绘制轨迹
+            if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                map.onResume()
+            }
             onDispose {
                 lifecycleOwner.lifecycle.removeObserver(observer)
                 map.onPause()
@@ -163,15 +168,24 @@ fun OsmTrackMap(
         }
     }
 
+    /** 按当前轨迹数据重绘一次（点数没变则跳过） */
+    fun drawOnce(view: MapView) {
+        if (renderedSize == points.size) return
+        renderedSize = points.size
+        val newKey = updateTrack(view, points, autoFollow, followKey)
+        if (newKey != null) followKey = newKey
+    }
+
     AndroidView(
         factory = { map },
         modifier = modifier,
         update = { view ->
-            // 视图已从窗口分离时跳过绘制，避免 osmdroid 在 detach 后更新崩溃
-            if (view.isAttachedToWindow && renderedSize != points.size) {
-                renderedSize = points.size
-                val newKey = updateTrack(view, points, autoFollow, followKey)
-                if (newKey != null) followKey = newKey
+            // 视口已从窗口分离时先跳过（避免 osmdroid 在 detach 后更新崩溃），
+            // 但必须在挂载后补一次重绘：详情页只渲染一次，错过这一次轨迹就永远不显示
+            if (view.isAttachedToWindow) {
+                drawOnce(view)
+            } else {
+                view.post { if (view.isAttachedToWindow) drawOnce(view) }
             }
         }
     )
