@@ -1,4 +1,4 @@
-﻿package com.run.tracker.service
+package com.run.tracker.service
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -84,8 +84,10 @@ class RunSessionTest {
             time += 1_000L
         }
         assertEquals(41, session.points.size)
-        // 40 段 x 3 米 = 120 米；允许滤波启动阶段的少量损失
-        assertEquals(120.0, session.distanceMeters, 10.0)
+        // 结束时会补上最后不足门槛的尾段
+        session.finish()
+        // 40 段 x 3 米 = 120 米
+        assertEquals(120.0, session.distanceMeters, 2.0)
     }
 
     @Test
