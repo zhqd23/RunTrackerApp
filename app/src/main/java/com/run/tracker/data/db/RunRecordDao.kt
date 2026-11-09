@@ -93,4 +93,12 @@ interface RunRecordDao {
         """
     )
     fun observePeriodStats(startMs: Long, endMs: Long): Flow<RunStatsRow?>
+
+    /** 卡路里重算所需的最小字段集合（不读取轨迹） */
+    @Query("SELECT id, distanceMeters, durationMs FROM run_records")
+    suspend fun listForCalorieRecalc(): List<RunCalorieRow>
+
+    /** 更新单条记录的卡路里 */
+    @Query("UPDATE run_records SET calories = :calories WHERE id = :id")
+    suspend fun updateCalories(id: Long, calories: Double)
 }

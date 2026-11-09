@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.run.tracker.R
 import com.run.tracker.RunTrackerApp
 import com.run.tracker.data.db.RunStatsRow
+import com.run.tracker.data.repository.UserProfileStore
 import com.run.tracker.util.PeriodUtils
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -16,6 +17,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 /** 统计页视图模式：累计 / 周报 / 月报 */
 enum class StatsTab(@StringRes val labelRes: Int) {
@@ -34,6 +36,7 @@ enum class StatsTab(@StringRes val labelRes: Int) {
 class StatsViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository = (application as RunTrackerApp).repository
+    private val profileStore = UserProfileStore(application)
 
     /** 全部累计统计 */
     val stats: StateFlow<RunStatsRow?> =
@@ -78,5 +81,13 @@ class StatsViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         _tab.value = tab
+    }
+
+    /** 保存体重，并按新体重重算全部历史记录的卡路里 */
+    fun saveWeight(weightKg: Double) {
+        profileStore.weightKg = weightKg
+        viewModelScope.launch {
+            repository.recalculateCalories(profileStore.weightKg)
+        }
     }
 }

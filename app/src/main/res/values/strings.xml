@@ -108,4 +108,11 @@
     <string name="common_cancel">取消</string>
     <string name="common_delete">删除</string>
     <string name="common_back">返回</string>
+
+    <!-- 体重设置 -->
+    <string name="stats_weight_entry">体重 %1$s kg</string>
+    <string name="weight_dialog_title">设置体重</string>
+    <string name="weight_dialog_hint">体重（kg）</string>
+    <string name="weight_dialog_desc">卡路里按体重与配速估算，填写真实体重才能算准</string>
+    <string name="weight_dialog_save">保存</string>
 </resources>

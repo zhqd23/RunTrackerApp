@@ -2,6 +2,7 @@ package com.run.tracker.service
 
 import com.run.tracker.data.model.TrackPoint
 import com.run.tracker.util.LocationUtils
+import com.run.tracker.util.MetCalculator
 
 /** 跑步状态 */
 enum class RunState { IDLE, RUNNING, PAUSED }
@@ -14,7 +15,7 @@ enum class RunState { IDLE, RUNNING, PAUSED }
  * - 即时速度：最近两点距离 / 时间差；
  * - 平均速度：总距离 / 总用时（扣除暂停）；
  * - 最大速度：全部即时速度的最大值；
- * - 卡路里：MET 代谢当量估算（跑步 MET≈9.8）。
+ * - 卡路里：按平均配速查 MET 表（见 MetCalculator），乘体重与时长。
  */
 class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
 
@@ -339,10 +340,10 @@ class RunSession(private val weightKg: Double = DEFAULT_WEIGHT_KG) {
     fun avgCadence(): Int =
         if (cadenceCount == 0) 0 else (cadenceSum / cadenceCount).toInt()
 
-    /** 卡路里估算：MET * 体重(kg) * 时长(h) */
+    /** 卡路里估算：按平均配速查 MET 表，再乘体重与时长 */
     fun calories(): Double {
         val hours = elapsedMs() / 3_600_000.0
-        return 9.8 * weightKg * hours
+        return MetCalculator.calories(weightKg, avgSpeedMs() * 3.6, hours)
     }
 }
 

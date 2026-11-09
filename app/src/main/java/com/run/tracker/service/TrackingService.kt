@@ -18,6 +18,7 @@ import com.run.tracker.RunTrackerApp
 import com.run.tracker.R
 import com.run.tracker.data.db.RunRecordEntity
 import com.run.tracker.data.model.RunUiState
+import com.run.tracker.data.repository.UserProfileStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -91,7 +92,7 @@ class TrackingService : Service() {
     private lateinit var locationTracker: LocationTracker
     private lateinit var stepTracker: StepCounterTracker
     private lateinit var heartRateManager: HeartRateManager
-    private val session = RunSession()
+    private val session = RunSession(UserProfileStore(this).weightKg)
     private var uiUpdateJob: Job? = null
 
     override fun onCreate() {

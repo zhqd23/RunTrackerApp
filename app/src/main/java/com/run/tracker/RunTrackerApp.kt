@@ -6,6 +6,7 @@ import android.util.Log
 import com.run.tracker.data.db.RunDatabase
 import com.run.tracker.data.repository.PendingRunStore
 import com.run.tracker.data.repository.RunRepository
+import com.run.tracker.data.repository.UserProfileStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -37,6 +38,27 @@ class RunTrackerApp : Application() {
         Configuration.getInstance().userAgentValue = packageName
 
         recoverPendingRun()
+        migrateCalories()
+    }
+
+    /**
+     * 卡路里算法从「固定 MET 9.8」改为「按配速查表 + 体重」后，
+     * 旧记录里存的是旧算法的结果，这里一次性按新算法重算，保证全表口径一致。
+     */
+    private fun migrateCalories() {
+        val prefs = getSharedPreferences(MIGRATION_PREFS, MODE_PRIVATE)
+        if (prefs.getBoolean(KEY_CALORIES_V2, false)) return
+
+        val weightKg = UserProfileStore(this).weightKg
+        appScope.launch {
+            try {
+                repository.recalculateCalories(weightKg)
+                prefs.edit().putBoolean(KEY_CALORIES_V2, true).apply()
+                Log.i(TAG, "历史记录卡路里已按新算法重算（体重 $weightKg kg）")
+            } catch (e: Exception) {
+                Log.e(TAG, "重算历史卡路里失败，下次启动重试", e)
+            }
+        }
     }
 
     /**
@@ -64,5 +86,7 @@ class RunTrackerApp : Application() {
 
     companion object {
         private const val TAG = "RunTrackerApp"
+        private const val MIGRATION_PREFS = "migration"
+        private const val KEY_CALORIES_V2 = "calories_v3"
     }
 }
