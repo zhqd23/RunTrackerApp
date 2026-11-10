@@ -92,11 +92,17 @@ class TrackingService : Service() {
     private lateinit var locationTracker: LocationTracker
     private lateinit var stepTracker: StepCounterTracker
     private lateinit var heartRateManager: HeartRateManager
-    private val session = RunSession(UserProfileStore(this).weightKg)
+
+    /**
+     * 必须在 onCreate 里创建：属性初始化器运行于构造函数阶段，
+     * 那时 attachBaseContext 还没执行，`this` 的 getApplicationContext() 是 null。
+     */
+    private lateinit var session: RunSession
     private var uiUpdateJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
+        session = RunSession(UserProfileStore(this).weightKg)
         createNotificationChannel()
         locationTracker = LocationTracker(this)
         stepTracker = StepCounterTracker(this, serviceScope)
