@@ -8,6 +8,7 @@ import android.graphics.Color
 import android.location.Location
 import android.location.LocationManager
 import android.util.Log
+import android.view.View
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -125,7 +126,7 @@ private fun lastKnownLocation(context: Context): Location? {
  *
  * @param points 轨迹点列表
  * @param interactive 是否允许用户交互（详情页传 false）
- * @param autoFollow 实时页传 true：每新增 5 个点自动调整视口跟随轨迹
+ * @param autoFollow 实时页传 true：每新增 5 个点把视野中心移到最新点（固定缩放跟随）
  * @param mapView 可复用的共享 MapView 实例；传入后本组件不再托管其生命周期（由持有者负责），
  *                避免 Tab 切换时反复重建地图导致卡顿/崩溃
  */
@@ -143,10 +144,29 @@ fun OsmTrackMap(
     var renderedSize by remember { mutableIntStateOf(-1) }
 
     val map = mapView ?: remember { createMapView(context, interactive) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    /** 按当前轨迹数据重绘一次（点数没变则跳过） */
+    fun drawOnce(view: MapView) {
+        // 视口尚未布局、或窗口不可见（息屏/后台）时不能再碰地图：
+        // 此时 Projection 退化，osmdroid 的 zoomToBoundingBox 会在 getCloserPixel 里死循环
+        // （真机 ANR：Input dispatching timed out，main 线程卡在 Projection.getCloserPixel）
+        if (view.width <= 0 || view.height <= 0) return
+        if (view.windowVisibility != View.VISIBLE) return
+        if (!view.isAttachedToWindow || view.repository == null) return
+        if (renderedSize == points.size) return
+        renderedSize = points.size
+        try {
+            val newKey = updateTrack(view, points, autoFollow, followKey)
+            if (newKey != null) followKey = newKey
+        } catch (e: Exception) {
+            // 地图绘制失败不能拖垮整个界面
+            Log.e("OsmTrackMap", "绘制轨迹失败", e)
+        }
+    }
 
     // 仅自建实例时托管生命周期：onResume/onPause 跟随 Activity，离开组合时先 onPause 再 onDetach
     if (mapView == null) {
-        val lifecycleOwner = LocalLifecycleOwner.current
         DisposableEffect(lifecycleOwner) {
             val observer = LifecycleEventObserver { _, event ->
                 when (event) {
@@ -169,27 +189,22 @@ fun OsmTrackMap(
         }
     }
 
-    /** 按当前轨迹数据重绘一次（点数没变则跳过） */
-    fun drawOnce(view: MapView) {
-        if (!view.isAttachedToWindow || view.repository == null) return
-        if (renderedSize == points.size) return
-        renderedSize = points.size
-        try {
-            val newKey = updateTrack(view, points, autoFollow, followKey)
-            if (newKey != null) followKey = newKey
-        } catch (e: Exception) {
-            // 地图绘制失败不能拖垮整个界面
-            Log.e("OsmTrackMap", "绘制轨迹失败", e)
+    // 回到前台后强制补一次重绘：后台/息屏期间的轨迹更新被上面的守卫跳过了
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) renderedSize = -1
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     AndroidView(
         factory = { map },
         modifier = modifier,
         update = { view ->
-            // 视口已从窗口分离时先跳过（避免 osmdroid 在 detach 后更新崩溃），
+            // 视口已从窗口分离或尚未布局时先跳过（避免 osmdroid 在 detach 后更新崩溃），
             // 但必须在挂载后补一次重绘：详情页只渲染一次，错过这一次轨迹就永远不显示
-            if (view.isAttachedToWindow) {
+            if (view.isAttachedToWindow && view.width > 0 && view.height > 0) {
                 drawOnce(view)
             } else {
                 view.post { if (view.isAttachedToWindow) drawOnce(view) }
@@ -250,11 +265,11 @@ private fun updateTrack(
         map.overlays.add(endMarker)
     }
 
-    // 视口跟随策略
+    // 视口跟随策略：实时页只把中心移到最新点（固定缩放），不再反复重算包围盒
     if (autoFollow) {
         val key = points.size / 5
         if (key != currentFollowKey) {
-            zoomToBounds(map, geoPoints)
+            followLastPoint(map, geoPoints.last())
             return key
         }
     } else if (points.size >= 2) {
@@ -265,12 +280,35 @@ private fun updateTrack(
     return null
 }
 
+/**
+ * 实时跟随：把视野中心移到最新轨迹点，缩放保持在街道级别。
+ *
+ * 不用 zoomToBoundingBox 的原因：它每次都要遍历全部轨迹点、并在 Projection 里做世界环绕换算，
+ * 轨迹变长后每秒调用会明显卡顿；视口尺寸异常时还会在 getCloserPixel 里死循环（真机 ANR）。
+ */
+private fun followLastPoint(map: MapView, last: GeoPoint) {
+    if (map.width <= 0 || map.height <= 0) return
+    if (map.zoomLevelDouble < 16.0) map.controller.setZoom(16.5)
+    map.controller.setCenter(last)
+}
+
 private fun zoomToBounds(map: MapView, points: List<GeoPoint>) {
+    // 视口未布局时投影退化，务必跳过（否则 osmdroid 内部可能死循环）
+    if (map.width <= 0 || map.height <= 0) return
     if (points.size < 2) {
-        map.controller.animateTo(points.first(), 16.0, 400L)
+        map.controller.setCenter(points.first())
         return
     }
     val bounds = BoundingBox.fromGeoPoints(points)
-    map.zoomToBoundingBox(bounds, false, 60)
-    map.invalidate()
+    // 所有点几乎重合时包围盒退化，zoomToBoundingBox 会算出极端缩放，直接定位即可
+    if (bounds.latNorth - bounds.latSouth < 1e-7 && bounds.lonEast - bounds.lonWest < 1e-7) {
+        map.controller.setCenter(points.first())
+        return
+    }
+    try {
+        map.zoomToBoundingBox(bounds, false, 60)
+        map.invalidate()
+    } catch (e: Exception) {
+        Log.e("OsmTrackMap", "缩放到底图范围失败", e)
+    }
 }
